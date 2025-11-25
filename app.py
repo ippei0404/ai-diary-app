@@ -46,10 +46,13 @@ except Exception as e:
 # ===============================================
 # メイン画面：日記の入力エリアとAPIキー
 # ===============================================
-
-# APIキーの入力（安全のためサイドバーで入力）
-# 開発者はローカルで実行するため、キー入力が必要です。
-api_key = st.sidebar.text_input("OpenAI APIキーを入力してください", type="password")
+# 🌟🌟🌟APIキーをSecretsから読み込むように変更 🌟🌟🌟
+try:
+    api_key = st.secrets["openai_api_key"]
+    st.sidebar.success("✅ OpenAI APIキーを読み込みました")
+except Exception:
+    api_key = "" # 読み込めなかった場合は空にする
+    st.sidebar.error("❌ OpenAI APIキーがSecretsに設定されていません。")
 
 st.subheader("📝 今日のメモ（雑でOK！）")
 user_input = st.text_area("例：疲れた。でもラーメン美味しかった。部長の話が長かった。", height=150)
@@ -57,7 +60,7 @@ user_input = st.text_area("例：疲れた。でもラーメン美味しかっ�
 # ボタンが押されたときの処理
 if st.button("日記を生成＆分析する"):
     if not api_key:
-        st.error("左側のサイドバーにAPIキーを入力してください！")
+        st.error("OpenAI APIキーが設定されていません。Streamlit Secretsを確認してください！")
     elif not user_input:
         st.warning("日記の内容を入力してください！")
     elif not sh:
