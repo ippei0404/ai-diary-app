@@ -29,7 +29,7 @@ try:
     # 接続するスプレッドシートのURLを指定
     # ---!!! ここは変更しないといけません !!!---
     # ローカル実行時もデプロイ時も、このURLは必要です。
-    spreadsheet_url = "ここに作成したスプレッドシートのURLを貼り付け" 
+    spreadsheet_url = "https://docs.google.com/spreadsheets/d/1OCRBMTg2a39M_uVG-YmsMZMtdq4R5XzOv26nYx1ajHQ/edit?gid=0#gid=0" 
     # ------------------------------------------
     
     # スプレッドシートを開く
