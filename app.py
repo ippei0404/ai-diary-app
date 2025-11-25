@@ -3,177 +3,270 @@ from openai import OpenAI
 import gspread
 import pandas as pd
 from datetime import datetime
-import json # JSONを扱うためにインポート
+import json
 
 # ===============================================
-# 画面のタイトル設定
+# 🔐 セキュリティ設定 (最優先)
 # ===============================================
-st.set_page_config(page_title="AI日記 & 感情分析", page_icon="📖")
-st.title("📖 AI日記 & 感情分析アプリ")
+def check_password():
+    """パスワード認証を行う関数"""
+    if "password_correct" not in st.session_state:
+        st.session_state.password_correct = False
+
+    if st.session_state.password_correct:
+        return True
+
+    st.set_page_config(page_title="ログイン", page_icon="🔒")
+    st.title("🔒 ログインが必要です")
+
+    password_input = st.text_input("パスワードを入力してください", type="password")
+    
+    if st.button("ログイン"):
+        # Secretsからパスワードを取得して照合
+        try:
+            correct_password = st.secrets["app_password"]
+            if password_input == correct_password:
+                st.session_state.password_correct = True
+                st.rerun() # 画面をリロードしてアプリを表示
+            else:
+                st.error("パスワードが違います")
+        except Exception:
+            st.error("Secretsに 'app_password' が設定されていません。Streamlit Cloudの設定を確認してください。")
+            
+    return False
+
+# ログインしていない場合はここでストップ（これより下のコードは実行されません）
+if not check_password():
+    st.stop()
 
 # ===============================================
-# 🌟🌟🌟 Google Sheets 認証と接続 (Secrets対応) 🌟🌟🌟
+# アプリ本編
+# ===============================================
+st.title("🎨 AI絵日記 & 感情分析アプリ")
+
+# ===============================================
+# 🌟 Google Sheets 認証と接続 (Secrets対応)
 # ===============================================
 sh = None
+worksheet = None
 try:
-    # ----------------------------------------------------------------------
-    # 変更点: Streamlit Secretsから認証情報を読み込む
-    # sheets_authシークレットは、[sheets_auth]セクション以下の情報を格納している
+    # Secretsから認証情報を読み込む
     sheets_auth_dict = st.secrets["sheets_auth"]
-    
-    # 認証情報を辞書として渡す
     gc = gspread.service_account_from_dict(sheets_auth_dict) 
     
+    # URLの設定
+    # ---!!! ここをあなたのスプレッドシートのURLに修正してください !!!---
+    spreadsheet_url = "https://docs.google.com/spreadsheets/d/xxxxxxxxxxxxxxxxxxxxxxxxx/edit#gid=0"
     # ----------------------------------------------------------------------
     
-    # 接続するスプレッドシートのURLを指定
-    # ---!!! ここは変更しないといけません !!!---
-    # ローカル実行時もデプロイ時も、このURLは必要です。
-    spreadsheet_url = "https://docs.google.com/spreadsheets/d/1OCRBMTg2a39M_uVG-YmsMZMtdq4R5XzOv26nYx1ajHQ/edit?gid=0#gid=0" 
-    # ------------------------------------------
-    
-    # スプレッドシートを開く
     sh = gc.open_by_url(spreadsheet_url)
-    worksheet = sh.sheet1 # 1枚目のシートを使用
-    st.sidebar.success("✅ スプレッドシートに接続しました")
+    worksheet = sh.sheet1
     
 except Exception as e:
-    st.sidebar.error("❌ スプレッドシート接続エラー")
-    st.sidebar.info("認証情報（Secrets）またはスプレッドシートURL、共有設定を確認してください。")
-    # 詳細なエラーをコンソールに出力
-    # print(f"接続エラー詳細: {e}")
+    st.sidebar.error("❌ データベース接続エラー")
+    st.sidebar.info("Secretsの設定やURLを確認してください")
 
 # ===============================================
-# メイン画面：日記の入力エリアとAPIキー
+# 🔄 今日の日記合体ロジック用関数
 # ===============================================
-# 🌟🌟🌟APIキーをSecretsから読み込むように変更 🌟🌟🌟
+def get_todays_previous_memo(worksheet):
+    """今日すでに書いたメモがあれば取得する"""
+    try:
+        data = worksheet.get_all_records()
+        df = pd.DataFrame(data)
+        if df.empty:
+            return ""
+        
+        today_str = datetime.now().strftime("%Y/%m/%d")
+        
+        # '日付'カラムを文字列にして、今日の日付で始まるものを探す
+        todays_entries = df[df['日付'].astype(str).str.startswith(today_str)]
+        
+        if not todays_entries.empty:
+            # 今日のメモをすべて結合して返す
+            previous_memos = todays_entries['元のメモ'].tolist()
+            return "\n\n".join(previous_memos)
+    except Exception:
+        return ""
+    return ""
+
+# ===============================================
+# メイン画面
+# ===============================================
+
+# APIキー読み込み
 try:
     api_key = st.secrets["openai_api_key"]
-    st.sidebar.success("✅ OpenAI APIキーを読み込みました")
-except Exception:
-    api_key = "" # 読み込めなかった場合は空にする
-    st.sidebar.error("❌ OpenAI APIキーがSecretsに設定されていません。")
+except:
+    st.error("OpenAI APIキーが設定されていません")
+    st.stop()
 
-st.subheader("📝 今日のメモ（雑でOK！）")
-user_input = st.text_area("例：疲れた。でもラーメン美味しかった。部長の話が長かった。", height=150)
+# 今日の過去メモを取得（合体用）
+previous_memo = ""
+if worksheet:
+    previous_memo = get_todays_previous_memo(worksheet)
 
-# ボタンが押されたときの処理
-if st.button("日記を生成＆分析する"):
-    if not api_key:
-        st.error("OpenAI APIキーが設定されていません。Streamlit Secretsを確認してください！")
-    elif not user_input:
-        st.warning("日記の内容を入力してください！")
-    elif not sh:
-        st.error("データベース（スプレッドシート）に接続できていません。左側のエラーを確認してください。")
+st.subheader("📝 今日のメモ")
+
+# 過去のメモがある場合はヒントを表示
+if previous_memo:
+    st.info(f"💡 今日は既に日記があります。入力すると自動で合体して書き直します。\n\n**過去のメモ:**\n{previous_memo}")
+
+user_input = st.text_area("出来事を入力（追記もOK！）", height=150)
+
+# ===============================================
+# 生成・保存処理
+# ===============================================
+if st.button("日記を作成する"):
+    if not user_input:
+        st.warning("内容を入力してください！")
+    elif not worksheet:
+        st.error("スプレッドシートに接続できません")
     else:
-        # OpenAIクライアントの準備
         client = OpenAI(api_key=api_key)
 
-        with st.spinner("AIが執筆中...🤖"):
-            try:
-                # AIへの指示（プロンプト）
-                system_prompt = """
-                あなたはプロのライター兼心理カウンセラーです。
-                ユーザーの「雑な日記メモ」を受け取り、以下の2つの処理を行い、必ず以下の出力形式に従ってください。
+        # 🌟 合体ロジック: 過去メモ + 新しいメモ
+        if previous_memo:
+            combined_input = f"{previous_memo}\n\n【追記】\n{user_input}"
+            system_instruction_add = "ユーザーは今日の日記に追記をしました。過去の分と新しい分を上手にまとめて、一つの自然な日記に書き直してください。"
+        else:
+            combined_input = user_input
+            system_instruction_add = "ユーザーの箇条書きメモを、情緒ある日記に清書してください。"
 
-                1. 【日記の清書】: 読みやすく、情緒ある丁寧な日本語の日記にリライトする。
-                2. 【感情分析】: その日記の「ポジティブ度（100点満点）」をつけ、心理分析に基づいた「一言コメント」を添える。
+        with st.spinner("AIが執筆＆お絵かき中...🎨"):
+            try:
+                # 1. テキスト生成 (GPT-4o-mini)
+                # 画像生成用のプロンプトも同時に作らせるのがポイント
+                system_prompt = f"""
+                あなたはプロのライター兼心理カウンセラーです。
+                {system_instruction_add}
+                
+                以下の処理を行い、指定の形式で出力してください。
+                1. 【日記の清書】: 大人の情緒ある丁寧な日本語の日記にする。
+                2. 【感情分析】: ポジティブ度（100点満点）と一言コメント。
+                3. 【画像生成プロンプト】: この日記の内容を「小学生がクレヨンで描いたような絵日記」にするための、画像生成AI(DALL-E 3)への英語の指示を作成する。
+                   (例: A children's crayon drawing of [シーンの説明], colorful, simple style on white paper.)
 
                 出力形式は必ず以下のように厳密に従ってください：
                 ---
                 【清書された日記】
-                （ここに清書された文章）
+                (ここに清書された文章)
 
                 【分析結果】
-                📊 ポジティブ度: （点数）/100
-                💬 AIからのコメント: （ここにコメント）
+                📊 ポジティブ度: (点数)/100
+                💬 コメント: (ここにコメント)
+
+                【IMAGE_PROMPT】
+                (ここに英語のプロンプト)
                 ---
                 """
 
-                # AIにリクエストを送る
                 response = client.chat.completions.create(
-                    model="gpt-4o-mini", # コストと速度のバランスが良いモデル
+                    model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_input}
+                        {"role": "user", "content": combined_input}
                     ]
                 )
-
-                # 結果の取得と表示
+                
                 result_text = response.choices[0].message.content
-                st.markdown("### ✨ 生成結果")
-                st.info(result_text)
+                
+                # 結果の分割（表示用と画像生成用に分ける）
+                # 万が一 IMAGE_PROMPT が生成されなかった場合のエラーハンドリング
+                if "【IMAGE_PROMPT】" in result_text:
+                    diary_part = result_text.split("【IMAGE_PROMPT】")[0].strip()
+                    image_prompt_part = result_text.split("【IMAGE_PROMPT】")[1].strip()
+                else:
+                    diary_part = result_text
+                    image_prompt_part = ""
+                
+                # テキスト結果表示
+                st.markdown("### 📖 日記")
+                st.info(diary_part)
 
-                # 🌟🌟🌟 スプレッドシートへの保存 🌟🌟🌟
-                # 日付、元のメモ、生成結果、分析結果を抽出
+                # 2. 画像生成 (DALL-E 3) 🌟新規追加
+                image_url = ""
+                if image_prompt_part:
+                    try:
+                        # プロンプトの調整（スタイルを強調）
+                        final_image_prompt = f"{image_prompt_part}, children's drawing style, crayon art, naive art, colorful, simple, white background."
+                        
+                        img_response = client.images.generate(
+                            model="dall-e-3",
+                            prompt=final_image_prompt,
+                            size="1024x1024",
+                            quality="standard",
+                            n=1,
+                        )
+                        image_url = img_response.data[0].url
+                        st.image(image_url, caption="AI絵日記", use_column_width=True)
+                    except Exception as img_e:
+                        st.warning(f"画像生成に失敗しました: {img_e}")
+
+                # 3. 保存処理
                 today = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                 
-                # 分析結果セクション全体を取得
-                analysis_section = result_text.split("【分析結果】")[1].strip() if "【分析結果】" in result_text else "N/A"
+                # 分析結果セクションの抽出
+                if "【分析結果】" in diary_part:
+                    analysis_section = diary_part.split("【分析結果】")[1].strip()
+                else:
+                    analysis_section = "N/A"
                 
-                # スプレッドシートに行を追加
+                # スプレッドシートに保存
+                # E列に「画像URL」というヘッダーを追加しておいてください
                 worksheet.append_row([
-                    today,          # 日付
-                    user_input,     # 元のメモ
-                    result_text,    # 生成された全結果
-                    analysis_section# 分析結果
+                    today,
+                    combined_input, # 合体したメモを保存
+                    diary_part,     # 清書結果
+                    analysis_section,
+                    image_url       # 🌟 画像URLも保存
                 ])
-                st.success(f"日記をスプレッドシートに保存しました。")
-                # 🌟🌟🌟 保存処理終わり 🌟🌟🌟
+                st.success("保存しました！")
 
             except Exception as e:
-                st.error(f"AI処理中にエラーが発生しました。APIキーまたはプロンプトを確認してください: {e}")
+                st.error(f"エラーが発生しました: {e}")
 
 st.markdown("---")
 # ===============================================
-# 📚 過去の日記表示セクション
+# 📚 過去の日記表示 (最新版を表示)
 # ===============================================
 st.header("📚 過去の日記")
 
-if sh: # 接続が成功している場合のみ表示
+if worksheet:
     try:
-        # シートの全データを読み込む
         data = worksheet.get_all_records()
         df = pd.DataFrame(data)
 
         if not df.empty:
-            # 最新の日記が上に来るように並び替え
-            df = df.iloc[::-1] 
+            df = df.iloc[::-1] # 新しい順
             
             for index, row in df.iterrows():
-                # 分析結果からポジティブ度とコメントを抽出し、見出しに使用
-                # エラー対策として、行データが文字列であることを確認してから処理
-                analysis_result_str = str(row['分析結果'])
-                
-                analysis_parts = analysis_result_str.split('\n')
-                score_line = next((line for line in analysis_parts if 'ポジティブ度' in line), "📊 ポジティブ度: N/A/100")
-                comment_line = next((line for line in analysis_parts if 'AIからのコメント' in line), "💬 AIからのコメント: N/A")
-                
-                # エキスパンダーのタイトルを作成
-                # スコアを抽出するために、'/'で分割し、さらに':'で分割する
+                # タイトル作成
                 try:
-                    score = score_line.split(':')[1].strip()
-                except IndexError:
+                    date_part = str(row['日付']).split(' ')[0]
+                    # 分析結果のパース
+                    analysis = str(row['分析結果'])
                     score = "N/A"
-                
-                expander_title = f"🗓️ {str(row['日付']).split(' ')[0]} - {score}"
-                
-                with st.expander(expander_title):
-                    st.markdown("#### ✨ 清書された日記")
+                    if "ポジティブ度" in analysis:
+                        score = analysis.split("ポジティブ度")[1].split("/")[0].replace(":", "").strip()
                     
-                    # 生成結果全体から清書された日記部分を抽出して表示
-                    diary_entry_raw = str(row['生成結果'])
-                    diary_entry = diary_entry_raw.split("【清書された日記】")[-1].split("【分析結果】")[0].strip()
-                    st.markdown(diary_entry)
-                    
-                    st.markdown("#### 💖 感情分析")
-                    st.markdown(score_line)
-                    st.markdown(comment_line)
-                    
-                    st.caption(f"**（元のメモ）**：{str(row['元のメモ'])}")
+                    with st.expander(f"🗓️ {date_part} - 気分: {score}"):
+                        # 画像表示 (画像URL列が存在し、URLが入っている場合)
+                        # get_all_recordsはスプレッドシートの1行目のヘッダー名を使います
+                        if '画像URL' in row and str(row['画像URL']).startswith('http'):
+                             st.image(row['画像URL'], caption="絵日記", width=300)
+                        
+                        # 日記本文
+                        if "【清書された日記】" in str(row['生成結果']):
+                            body = str(row['生成結果']).split("【清書された日記】")[1].split("【分析結果】")[0].strip()
+                            st.write(body)
+                        else:
+                            st.write(row['生成結果'])
+                        
+                        st.caption(f"元のメモ: {row['元のメモ']}")
+                        
+                except Exception:
+                    continue
 
-        else:
-            st.info("まだ日記が保存されていません。日記を生成して保存してください。")
-            
     except Exception as e:
-        st.error(f"過去の日記読み込みエラー: データ形式を確認してください。{e}")
+        st.error(f"データの読み込みに失敗しました: {e}")
