@@ -3,6 +3,7 @@ from openai import OpenAI
 import gspread
 import pandas as pd
 from datetime import datetime
+import json # JSONを扱うためにインポート
 
 # ===============================================
 # 画面のタイトル設定
@@ -11,17 +12,25 @@ st.set_page_config(page_title="AI日記 & 感情分析", page_icon="📖")
 st.title("📖 AI日記 & 感情分析アプリ")
 
 # ===============================================
-# 🌟🌟🌟 Google Sheets 認証と接続 🌟🌟🌟
+# 🌟🌟🌟 Google Sheets 認証と接続 (Secrets対応) 🌟🌟🌟
 # ===============================================
 sh = None
 try:
-    # JSONファイル名: sheets_auth.json を指定
-    gc = gspread.service_account(filename="sheets_auth.json") 
+    # ----------------------------------------------------------------------
+    # 変更点: Streamlit Secretsから認証情報を読み込む
+    # sheets_authシークレットは、[sheets_auth]セクション以下の情報を格納している
+    sheets_auth_dict = st.secrets["sheets_auth"]
+    
+    # 認証情報を辞書として渡す
+    gc = gspread.service_account_from_dict(sheets_auth_dict) 
+    
+    # ----------------------------------------------------------------------
     
     # 接続するスプレッドシートのURLを指定
-    # ---!!! ここをあなたのスプレッドシートのURLに修正してください !!!---
-    spreadsheet_url = "https://docs.google.com/spreadsheets/d/1OCRBMTg2a39M_uVG-YmsMZMtdq4R5XzOv26nYx1ajHQ/edit?gid=0#gid=0" 
-    # ----------------------------------------------------------------------
+    # ---!!! ここは変更しないといけません !!!---
+    # ローカル実行時もデプロイ時も、このURLは必要です。
+    spreadsheet_url = "ここに作成したスプレッドシートのURLを貼り付け" 
+    # ------------------------------------------
     
     # スプレッドシートを開く
     sh = gc.open_by_url(spreadsheet_url)
@@ -30,13 +39,16 @@ try:
     
 except Exception as e:
     st.sidebar.error("❌ スプレッドシート接続エラー")
-    st.sidebar.info("認証JSONファイルの有無、スプレッドシートURL、共有設定を確認してください。")
+    st.sidebar.info("認証情報（Secrets）またはスプレッドシートURL、共有設定を確認してください。")
+    # 詳細なエラーをコンソールに出力
+    # print(f"接続エラー詳細: {e}")
 
 # ===============================================
 # メイン画面：日記の入力エリアとAPIキー
 # ===============================================
 
 # APIキーの入力（安全のためサイドバーで入力）
+# 開発者はローカルで実行するため、キー入力が必要です。
 api_key = st.sidebar.text_input("OpenAI APIキーを入力してください", type="password")
 
 st.subheader("📝 今日のメモ（雑でOK！）")
@@ -127,25 +139,35 @@ if sh: # 接続が成功している場合のみ表示
             
             for index, row in df.iterrows():
                 # 分析結果からポジティブ度とコメントを抽出し、見出しに使用
-                analysis_parts = row['分析結果'].split('\n')
-                score_line = next((line for line in analysis_parts if 'ポジティブ度' in line), "N/A")
-                comment_line = next((line for line in analysis_parts if 'AIからのコメント' in line), "N/A")
+                # エラー対策として、行データが文字列であることを確認してから処理
+                analysis_result_str = str(row['分析結果'])
+                
+                analysis_parts = analysis_result_str.split('\n')
+                score_line = next((line for line in analysis_parts if 'ポジティブ度' in line), "📊 ポジティブ度: N/A/100")
+                comment_line = next((line for line in analysis_parts if 'AIからのコメント' in line), "💬 AIからのコメント: N/A")
                 
                 # エキスパンダーのタイトルを作成
-                expander_title = f"🗓️ {row['日付'].split(' ')[0]} - {score_line.split(':')[1].strip()}"
+                # スコアを抽出するために、'/'で分割し、さらに':'で分割する
+                try:
+                    score = score_line.split(':')[1].strip()
+                except IndexError:
+                    score = "N/A"
+                
+                expander_title = f"🗓️ {str(row['日付']).split(' ')[0]} - {score}"
                 
                 with st.expander(expander_title):
                     st.markdown("#### ✨ 清書された日記")
                     
                     # 生成結果全体から清書された日記部分を抽出して表示
-                    diary_entry = row['生成結果'].split("【清書された日記】")[-1].split("【分析結果】")[0].strip()
+                    diary_entry_raw = str(row['生成結果'])
+                    diary_entry = diary_entry_raw.split("【清書された日記】")[-1].split("【分析結果】")[0].strip()
                     st.markdown(diary_entry)
                     
                     st.markdown("#### 💖 感情分析")
                     st.markdown(score_line)
                     st.markdown(comment_line)
                     
-                    st.caption(f"**（元のメモ）**：{row['元のメモ']}")
+                    st.caption(f"**（元のメモ）**：{str(row['元のメモ'])}")
 
         else:
             st.info("まだ日記が保存されていません。日記を生成して保存してください。")
