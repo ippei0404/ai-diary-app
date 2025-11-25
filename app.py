@@ -56,7 +56,7 @@ try:
     
     # URLの設定
     # ---!!! ここをあなたのスプレッドシートのURLに修正してください !!!---
-    spreadsheet_url = "https://docs.google.com/spreadsheets/d/xxxxxxxxxxxxxxxxxxxxxxxxx/edit#gid=0"
+    spreadsheet_url = "https://docs.google.com/spreadsheets/d/1OCRBMTg2a39M_uVG-YmsMZMtdq4R5XzOv26nYx1ajHQ"
     # ----------------------------------------------------------------------
     
     sh = gc.open_by_url(spreadsheet_url)
